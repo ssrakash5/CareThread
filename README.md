@@ -46,18 +46,32 @@ enough to build and demo convincingly, general enough that the same
 architecture (patient memory → obligation tracking → evidence matching →
 bounded agent actions) extends to other kinds of dropped follow-up later.
 
-This build targets **local development only** — no AWS deployment yet.
-Bedrock is stood in with a deterministic rule-based agent
-(`backend/app/agents`, `backend/app/ingestion/extractors.py`); S3 is stood
-in with local disk storage under `storage/artifacts/`; CockroachDB is
-stood in with Postgres + pgvector (wire-compatible, same schema, easy to
-swap later).
+**AWS integration.** With `CARETHREAD_AI_PROVIDER=bedrock` (the default in
+`backend/.env.example`) the backend uses:
+
+- **Claude on Amazon Bedrock** for clinical document extraction
+  (`backend/app/ai/extraction.py`) and as the evidence-matching judge
+  (`backend/app/ai/matching.py`) — schema-enforced JSON via forced tool use.
+- **Amazon Titan Text Embeddings v2** for chunk embeddings
+  (`backend/app/ai/bedrock.py`), stored in a pgvector column.
+- **Amazon S3** for raw artifact storage when `CARETHREAD_S3_BUCKET` is set
+  (`backend/app/ai/storage.py`); local disk otherwise.
+- **CockroachDB Cloud** (or local Postgres + pgvector) via `CARETHREAD_DATABASE_URL`.
+
+Set `CARETHREAD_AI_PROVIDER=local` to run fully offline with the deterministic
+regex/hash stand-ins that live alongside the Bedrock code — those are also
+the automatic per-call fallback if a Bedrock request fails, so a demo never
+hard-stops on a network blip (a warning is logged).
 
 ## Prerequisites
 
-- Docker (for local Postgres + pgvector)
 - Python 3.10+
 - Node.js 18+
+- Either a CockroachDB Cloud cluster or Docker (for local Postgres + pgvector)
+- For `CARETHREAD_AI_PROVIDER=bedrock`: AWS credentials in the environment or
+  `~/.aws/credentials` with Bedrock model access to a Claude model and
+  `amazon.titan-embed-text-v2:0` in your region (plus S3 write access if
+  you set a bucket)
 
 ## Run it
 
@@ -75,7 +89,8 @@ docker run -d --name carethread-pg -e POSTGRES_USER=carethread \
 cd backend
 python -m venv .venv
 ./.venv/Scripts/pip install -r requirements.txt     # Windows
-python seed.py                                       # loads synthetic demo dataset
+cp .env.example .env                                 # then edit: DB URL, AI provider, S3 bucket
+python seed.py                                       # drops+recreates tables, loads demo dataset (~3 min on Bedrock)
 ./.venv/Scripts/python -m uvicorn app.main:app --port 8001 --reload
 ```
 
@@ -116,20 +131,33 @@ is patient-scoped (`WHERE patient_id = :id`), the agent only ever writes
 that mutates `care_threads` state — and every mutation writes an immutable
 `ThreadEvent`.
 
+## AI pipeline (Bedrock)
+
+Per ingested document (`app/ingestion/pipeline.py`):
+
+1. Raw text → S3 (`app/ai/storage.py`).
+2. Chunk → Titan v2 embeddings (256-d) → pgvector.
+3. Claude extracts facts (`FOLLOWUP_RECOMMENDATION`, `FOLLOWUP_COMPLETED`,
+   `STABLE_FINDING`, …) and structured incidental findings with anatomical
+   location and follow-up interval — for any finding type, not just
+   pulmonary nodules.
+4. Rule-based scoring (same patient, location, finding type, embedding
+   similarity) produces explainable signals; Claude then judges each open
+   thread and returns `match_confidence`, clinician-readable `reasons`,
+   `relationship_type` (`COMPLETION_EVIDENCE` / `STATUS_UPDATE` / …) and
+   whether the obligation is fulfilled.
+5. The agent proposes `LINK_EVIDENCE` / `CLOSE_THREAD` / `OPEN_THREAD` as
+   `PENDING` actions only — a clinician approves in the UI.
+
+Model IDs are configuration (`CARETHREAD_BEDROCK_MODEL_ID`,
+`CARETHREAD_BEDROCK_EMBED_MODEL_ID`); switching to a newer Claude once your
+AWS account has access is a one-line `.env` change.
+
 ## What's mocked / deferred
 
-- **Agent reasoning**: rule-based (regex/keyword extraction + weighted
-  scoring), not an LLM. Swap point is `app/ingestion/extractors.py` and
-  `app/agents/matching_agent.py` — same call signatures, real Bedrock/Claude
-  calls can replace the logic bodies later.
-- **Embeddings**: deterministic local hashing-trick vectors
-  (`app/ingestion/embeddings.py`), not Bedrock embeddings. Stored/queried
-  through pgvector so a real embedding model is a drop-in swap.
 - **Auth**: demo RBAC via `X-User-Id` / `X-User-Role` headers
   (`app/security/roles.py`), not real authentication.
-- **Storage**: local disk instead of S3 (`app/ingestion/pipeline.py`).
-- **Deployment**: none — Terraform/SAM, Bedrock, S3, and CockroachDB Cloud
-  wiring are out of scope until explicitly requested.
+- **Deployment**: backend/frontend run locally; no IaC yet.
 
 ## Layout
 

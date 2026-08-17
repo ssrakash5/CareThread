@@ -1,13 +1,21 @@
 """
-Per-document-type extraction/chunking/fact-extraction, per spec section 24.
+Document chunking + fact/finding extraction (spec section 24).
 
-Each artifact_type gets a small extractor rather than one giant prompt.
-Extraction here is regex/keyword based (mock agent reasoning, per project
-decision to defer Bedrock until deployment).
+``extract_document`` is the entry point the pipeline uses. It dispatches on
+``settings.ai_provider``:
+  * ``bedrock`` -> Claude on Amazon Bedrock (app/ai/extraction.py) — general
+    incidental-finding extraction for any document type.
+  * ``local``   -> the regex/keyword extractor below (pulmonary-nodule focused,
+    no network) — also the automatic fallback if the Bedrock call fails.
 """
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import List
+
+from app.config import settings
+
+log = logging.getLogger("carethread.extractors")
 
 
 @dataclass
@@ -101,3 +109,38 @@ def extract_anatomical_location(full_text: str) -> str:
     if not loc:
         return ""
     return f"{loc.group(1).upper()}_{loc.group(2).upper()}_LOBE"
+
+
+# ---------------------------------------------------------------------------
+# Provider dispatch
+# ---------------------------------------------------------------------------
+
+def _local_extraction(full_text: str):
+    """Wrap the regex extractor in the ExtractionResult shape the LLM path returns."""
+    from app.ai.extraction import ExtractionResult, ExtractedFinding
+
+    facts = extract_facts(full_text)
+    location = extract_anatomical_location(full_text)
+    findings = []
+    nodule = next((f for f in facts if f.fact_type == "PULMONARY_NODULE_FINDING"), None)
+    followup = next((f for f in facts if f.fact_type == "FOLLOWUP_RECOMMENDATION"), None)
+    if nodule:
+        findings.append(ExtractedFinding(
+            finding_type="PULMONARY_NODULE",
+            anatomical_location=location,
+            description=nodule.fact_text,
+            followup_recommended=followup is not None,
+            followup_interval=followup.normalized_value if followup else "",
+        ))
+    return ExtractionResult(facts=facts, findings=findings, anatomical_location=location)
+
+
+def extract_document(full_text: str, artifact_type: str = ""):
+    """Return an ``ExtractionResult`` (facts + findings + primary location)."""
+    if settings.ai_provider == "bedrock":
+        try:
+            from app.ai.extraction import extract_document_bedrock
+            return extract_document_bedrock(full_text, artifact_type)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Bedrock extraction failed (%s); using local extractor", e)
+    return _local_extraction(full_text)

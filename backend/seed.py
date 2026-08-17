@@ -14,7 +14,8 @@ from datetime import date, datetime, timedelta
 
 from sqlalchemy import text, select
 
-from app.db import SessionLocal, engine, Base
+from app.config import settings
+from app.db import SessionLocal, engine, Base, ensure_vector_support
 from app.models import Patient, ProposedAction, CareThread, Finding, ArtifactChunk, ThreadEvidence
 from app.ingestion.pipeline import ingest_artifact
 from app.workflows.approval_service import approve_action, _log_event
@@ -123,7 +124,8 @@ def build_demo_thread(
     types beyond pulmonary nodules. Still goes through the real approval
     service + state machine so audit events/history stay consistent."""
     result = ingest_artifact(db, patient.patient_id, artifact_type, artifact_title,
-                              artifact_text, document_date, source_provider)
+                              artifact_text, document_date, source_provider,
+                              auto_propose_threads=False)  # thread is built by hand below
     db.flush()
     artifact_id = result["artifact_id"]
     chunk_id = first_chunk_id(db, artifact_id)
@@ -194,17 +196,18 @@ def _path_to(current: str, target: str) -> list[str]:
 
 
 def seed():
-    with engine.connect() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        conn.commit()
+    ensure_vector_support()
+    # Drop + recreate so schema changes (e.g. embedding_dim -> pgvector width)
+    # take effect. This is a demo database; the seed is the source of truth.
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+    print(f"AI provider: {settings.ai_provider}"
+          + (f" ({settings.bedrock_model_id}, {settings.bedrock_embed_model_id}, dim={settings.embedding_dim})"
+             if settings.ai_provider == "bedrock" else "")
+          + f" | storage: {'s3://' + settings.s3_bucket if settings.s3_bucket else 'local disk'}")
 
     db = SessionLocal()
     try:
-        for table in ["thread_events", "proposed_actions", "thread_evidence", "care_threads",
-                      "findings", "facts", "artifact_chunks", "artifacts", "patients"]:
-            db.execute(text(f"DELETE FROM {table}"))
-        db.commit()
 
         jane = Patient(mrn="MRN-100231", display_name="Jane Doe", dob=date(1965, 4, 2),
                         jurisdiction="US-CA", home_region="us-west-demo")
@@ -226,8 +229,14 @@ def seed():
             print(f"{p.display_name} -> {p.patient_id}")
 
         # --- Jane Doe: full flagship lifecycle, driven by the real ingestion pipeline ---
+        print("Ingesting demo documents (each one runs extraction + matching)...")
         r1 = ingest_artifact(db, jane.patient_id, "RADIOLOGY_REPORT", "CT Chest Without Contrast",
                               JANE_RADIOLOGY, date(2026, 3, 12), "Radiology Associates")
+        print("  Jane CT ->", r1["facts_extracted"], "| findings:", [f["finding_type"] for f in r1["findings_extracted"]],
+              "| thread:", r1.get("thread_id"))
+        if not r1.get("thread_id"):
+            raise SystemExit("Seed aborted: the flagship CT report did not produce an OPEN_THREAD proposal. "
+                             "Check extraction output above.")
         r2 = ingest_artifact(db, jane.patient_id, "DISCHARGE_SUMMARY", "Hospital Discharge Summary",
                               JANE_DISCHARGE, date(2026, 3, 14), "General Hospital")
         thread_id = r1.get("thread_id")
