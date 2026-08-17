@@ -1,4 +1,6 @@
 backend/.venv/
+backend/ctread/
+backend/.env
 backend/__pycache__/
 backend/**/__pycache__/
 storage/artifacts/

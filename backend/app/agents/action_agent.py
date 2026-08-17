@@ -4,6 +4,7 @@ produces PENDING ProposedAction rows through this small action interface —
 it never writes to care_threads/thread_evidence directly. The workflow
 service (approval_service.py) is what executes state.
 """
+import re
 from datetime import date, timedelta
 from typing import Optional
 
@@ -11,6 +12,20 @@ from sqlalchemy.orm import Session
 
 from app.models import ProposedAction, Finding, Artifact
 from app.ingestion.extractors import ExtractedFact
+
+_INTERVAL_RE = re.compile(r"(\d+)(?:\s*(?:-|to)\s*(\d+))?\s*(day|week|month|year)s?", re.IGNORECASE)
+_UNIT_DAYS = {"day": 1, "week": 7, "month": 30, "year": 365}
+
+
+def _interval_days(normalized_value: str, default_days: int = 270) -> int:
+    """'6-12months' -> 270, '4weeks' -> 28, '6 months' -> 180. Ranges use the
+    midpoint. Falls back to ~9 months when no interval is parseable."""
+    m = _INTERVAL_RE.search(normalized_value or "")
+    if not m:
+        return default_days
+    lo = int(m.group(1))
+    hi = int(m.group(2)) if m.group(2) else lo
+    return max(1, ((lo + hi) // 2) * _UNIT_DAYS[m.group(3).lower()])
 
 
 def propose_thread(
@@ -20,14 +35,8 @@ def propose_thread(
     followup_fact: Optional[ExtractedFact],
     source_artifact: Artifact,
 ) -> ProposedAction:
-    interval_months = 9
-    if followup_fact and followup_fact.normalized_value:
-        digits = "".join(c for c in followup_fact.normalized_value if c.isdigit() or c in "-")
-        nums = [int(n) for n in digits.replace("to", "-").split("-") if n.isdigit()]
-        if nums:
-            interval_months = sum(nums) // len(nums)
-
-    due_at = date.today() + timedelta(days=interval_months * 30)
+    interval_days = _interval_days(followup_fact.normalized_value if followup_fact else "")
+    due_at = date.today() + timedelta(days=interval_days)
     title = f"Incidental {finding.finding_type.replace('_', ' ').title()} Follow-up"
 
     action = ProposedAction(
@@ -51,7 +60,7 @@ def propose_thread(
     return action
 
 
-def propose_closure(db: Session, thread_id: str, patient_id: str, artifact_id: str, chunk_id: str, reason: str) -> ProposedAction:
+def propose_closure(db: Session, thread_id: str, patient_id: str, artifact_id: str, chunk_id: Optional[str], reason: str) -> ProposedAction:
     return ProposedAction(
         thread_id=thread_id,
         patient_id=patient_id,

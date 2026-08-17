@@ -2,28 +2,25 @@
 End-to-end ingestion pipeline (spec section 5):
 store -> extract -> normalize -> chunk -> embed -> extract facts/findings
 -> search this patient's open threads -> propose thread / link evidence / no action.
+
+Provider-agnostic: storage (S3/local), embeddings (Titan/local), extraction
+(Claude/regex) and matching (Claude judge/rules) are all dispatched behind the
+functions imported below according to ``settings.ai_provider`` / ``s3_bucket``.
 """
-from datetime import datetime, date
-from pathlib import Path
-from typing import Optional
+from datetime import date
 
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.models import Artifact, ArtifactChunk, Fact, Finding, CareThread, ProposedAction
-from app.ingestion.extractors import chunk_text, extract_facts, extract_anatomical_location
+from app.ingestion.extractors import chunk_text, extract_document, ExtractedFact
 from app.ingestion.embeddings import embed_text
+from app.ai.storage import store_raw
 from app.agents.matching_agent import find_candidate_threads
 from app.agents.action_agent import propose_thread as agent_propose_thread, propose_closure as agent_propose_closure
 
 
-def _store_raw(patient_id: str, artifact_type: str, title: str, text: str) -> str:
-    subdir = Path(settings.storage_dir) / patient_id / artifact_type.lower()
-    subdir.mkdir(parents=True, exist_ok=True)
-    safe_title = "".join(c if c.isalnum() or c in "-_." else "_" for c in title)
-    path = subdir / f"{safe_title}.txt"
-    path.write_text(text, encoding="utf-8")
-    return f"local://{path.relative_to(Path(settings.storage_dir).parent)}"
+def _thread_type_for(finding_type: str) -> str:
+    return "INCIDENTAL_PULMONARY_FOLLOWUP" if finding_type == "PULMONARY_NODULE" else "INCIDENTAL_FOLLOWUP"
 
 
 def ingest_artifact(
@@ -34,8 +31,9 @@ def ingest_artifact(
     text: str,
     document_date: date,
     source_provider: str = "",
+    auto_propose_threads: bool = True,
 ) -> dict:
-    s3_uri = _store_raw(patient_id, artifact_type, title, text)
+    s3_uri = store_raw(patient_id, artifact_type, title, text)
 
     artifact = Artifact(
         patient_id=patient_id,
@@ -49,10 +47,9 @@ def ingest_artifact(
     db.add(artifact)
     db.flush()
 
+    # --- chunk + embed ------------------------------------------------------
     extracted_chunks = chunk_text(text)
-    chunk_rows = []
-    chunk_texts = []
-    chunk_embeddings = []
+    chunk_rows, chunk_texts, chunk_embeddings = [], [], []
     for idx, ec in enumerate(extracted_chunks):
         embedding = embed_text(ec.text)
         chunk = ArtifactChunk(
@@ -69,12 +66,14 @@ def ingest_artifact(
         chunk_texts.append(ec.text)
         chunk_embeddings.append(embedding)
     db.flush()
+    first_chunk_id = chunk_rows[0].chunk_id if chunk_rows else None
 
-    facts = extract_facts(text)
-    fact_rows = []
+    # --- extract facts + findings (Claude on Bedrock, or local regex) --------
+    extraction = extract_document(text, artifact_type)
+    facts = extraction.facts
     for i, f in enumerate(facts):
         chunk = chunk_rows[min(i, len(chunk_rows) - 1)] if chunk_rows else None
-        fact_row = Fact(
+        db.add(Fact(
             patient_id=patient_id,
             artifact_id=artifact.artifact_id,
             chunk_id=chunk.chunk_id if chunk else None,
@@ -82,9 +81,7 @@ def ingest_artifact(
             fact_text=f.fact_text,
             normalized_value=f.normalized_value,
             confidence=f.confidence,
-        )
-        db.add(fact_row)
-        fact_rows.append(fact_row)
+        ))
 
     artifact.status = "PROCESSED"
 
@@ -92,84 +89,108 @@ def ingest_artifact(
         "artifact_id": artifact.artifact_id,
         "chunks_created": len(chunk_rows),
         "facts_extracted": [f.fact_type for f in facts],
+        "findings_extracted": [
+            {"finding_type": fd.finding_type, "anatomical_location": fd.anatomical_location,
+             "description": fd.description, "followup_recommended": fd.followup_recommended,
+             "followup_interval": fd.followup_interval}
+            for fd in extraction.findings
+        ],
         "proposed_actions": [],
         "match_candidates": [],
     }
 
-    nodule_fact = next((f for f in facts if f.fact_type == "PULMONARY_NODULE_FINDING"), None)
     followup_fact = next((f for f in facts if f.fact_type == "FOLLOWUP_RECOMMENDATION"), None)
     completed_fact = next((f for f in facts if f.fact_type == "FOLLOWUP_COMPLETED"), None)
 
-    candidates = find_candidate_threads(db, patient_id, artifact, chunk_texts, chunk_embeddings)
+    # --- match against this patient's open threads --------------------------
+    candidates = find_candidate_threads(
+        db, patient_id, artifact, chunk_texts, chunk_embeddings,
+        doc_location=extraction.anatomical_location,
+        completed_hint=completed_fact is not None,
+    )
     result["match_candidates"] = [
         {"thread_id": c.thread_id, "match_confidence": c.match_confidence,
-         "reasons": c.reasons, "recommended_action": c.recommended_action}
+         "reasons": c.reasons, "recommended_action": c.recommended_action,
+         "relationship_type": c.relationship_type, "judged_by": c.judged_by}
         for c in candidates
     ]
 
     if candidates:
         top = candidates[0]
-        rel_type = "COMPLETION_EVIDENCE" if completed_fact else "STATUS_UPDATE"
         link_action = ProposedAction(
             thread_id=top.thread_id,
             patient_id=patient_id,
             action_type="LINK_EVIDENCE",
-            proposed_payload={"relationship_type": rel_type},
+            proposed_payload={"relationship_type": top.relationship_type},
             reason="; ".join(top.reasons),
             confidence=top.match_confidence,
-            source_evidence={"artifact_id": artifact.artifact_id,
-                              "chunk_id": chunk_rows[0].chunk_id if chunk_rows else None},
+            source_evidence={"artifact_id": artifact.artifact_id, "chunk_id": first_chunk_id},
         )
         db.add(link_action)
         db.flush()
         result["proposed_actions"].append({"action_id": link_action.action_id, "action_type": "LINK_EVIDENCE",
                                             "thread_id": top.thread_id, "status": link_action.status})
 
-        if completed_fact and top.match_confidence >= 0.75:
+        if top.closes_obligation and top.match_confidence >= 0.75:
             closure_action = agent_propose_closure(
-                db, top.thread_id, patient_id, artifact.artifact_id,
-                chunk_rows[0].chunk_id if chunk_rows else None,
+                db, top.thread_id, patient_id, artifact.artifact_id, first_chunk_id,
                 reason="Follow-up imaging referenced in new evidence appears to complete the outstanding obligation.",
             )
             db.add(closure_action)
             db.flush()
             result["proposed_actions"].append({"action_id": closure_action.action_id, "action_type": "CLOSE_THREAD",
                                                 "thread_id": top.thread_id, "status": closure_action.status})
+        return result
 
-    elif nodule_fact and followup_fact:
-        location = extract_anatomical_location(text)
-        finding = Finding(
-            patient_id=patient_id,
-            finding_type="PULMONARY_NODULE",
-            anatomical_location=location,
-            finding_description=nodule_fact.fact_text,
-            source_artifact_id=artifact.artifact_id,
-            source_chunk_id=chunk_rows[0].chunk_id if chunk_rows else None,
+    # --- no open thread matched: propose a new one for the primary finding ---
+    if not auto_propose_threads:
+        return result
+
+    primary = next((fd for fd in extraction.findings if fd.followup_recommended), None)
+    if primary is None or (followup_fact is None and not primary.followup_interval):
+        return result
+
+    location = primary.anatomical_location or extraction.anatomical_location
+    finding = Finding(
+        patient_id=patient_id,
+        finding_type=primary.finding_type,
+        anatomical_location=location,
+        finding_description=primary.description,
+        source_artifact_id=artifact.artifact_id,
+        source_chunk_id=first_chunk_id,
+    )
+    db.add(finding)
+    db.flush()
+
+    pretty_type = primary.finding_type.replace("_", " ").title()
+    pretty_loc = location.replace("_", " ").title() or "Unspecified Location"
+    thread = CareThread(
+        patient_id=patient_id,
+        thread_type=_thread_type_for(primary.finding_type),
+        title=f"Incidental {pretty_type} Follow-up ({pretty_loc})",
+        finding_id=finding.finding_id,
+        status="PROPOSED",
+    )
+    db.add(thread)
+    db.flush()
+
+    # action_agent derives the interval from followup_fact.normalized_value; if the
+    # LLM only put the interval on the finding, synthesise a fact-like carrier.
+    if followup_fact is None:
+        followup_fact = ExtractedFact(
+            fact_type="FOLLOWUP_RECOMMENDATION",
+            fact_text=primary.description,
+            normalized_value=primary.followup_interval.replace(" ", ""),
         )
-        db.add(finding)
-        db.flush()
+    open_action = agent_propose_thread(db, patient_id, finding, followup_fact, artifact)
+    open_action.thread_id = thread.thread_id
+    db.add(open_action)
+    db.flush()
 
-        thread = CareThread(
-            patient_id=patient_id,
-            thread_type="INCIDENTAL_PULMONARY_FOLLOWUP",
-            title=f"Incidental Pulmonary Nodule Follow-up ({location.replace('_', ' ').title() or 'Unspecified Location'})",
-            finding_id=finding.finding_id,
-            status="PROPOSED",
-        )
-        db.add(thread)
-        db.flush()
+    thread.due_at = date.fromisoformat(open_action.proposed_payload["due_at"])
+    thread.priority = open_action.proposed_payload["priority"]
 
-        open_action = agent_propose_thread(db, patient_id, finding, followup_fact, artifact)
-        open_action.thread_id = thread.thread_id
-        open_action.proposed_payload["due_at"] = open_action.proposed_payload["due_at"]
-        db.add(open_action)
-        db.flush()
-
-        thread.due_at = date.fromisoformat(open_action.proposed_payload["due_at"])
-        thread.priority = open_action.proposed_payload["priority"]
-
-        result["proposed_actions"].append({"action_id": open_action.action_id, "action_type": "OPEN_THREAD",
-                                            "thread_id": thread.thread_id, "status": open_action.status})
-        result["thread_id"] = thread.thread_id
-
+    result["proposed_actions"].append({"action_id": open_action.action_id, "action_type": "OPEN_THREAD",
+                                        "thread_id": thread.thread_id, "status": open_action.status})
+    result["thread_id"] = thread.thread_id
     return result

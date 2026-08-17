@@ -132,6 +132,7 @@ class IngestResult(BaseModel):
     artifact_id: str
     chunks_created: int
     facts_extracted: List[str]
+    findings_extracted: List[dict] = []
     proposed_actions: List[dict]
     match_candidates: List[dict]
     thread_id: Optional[str] = None

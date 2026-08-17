@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.db import engine, Base
+from app.db import engine, Base, ensure_vector_support
 from app.api import patients, artifacts, threads, actions, audit
 import app.models  # noqa: F401 ensures models are registered on Base
 
@@ -24,9 +24,7 @@ app.include_router(audit.router)
 
 @app.on_event("startup")
 def on_startup():
-    with engine.connect() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        conn.commit()
+    ensure_vector_support()
     Base.metadata.create_all(bind=engine)
 
 
