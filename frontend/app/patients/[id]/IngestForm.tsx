@@ -28,8 +28,7 @@ export default function IngestForm({ patientId, artifactTypes }: { patientId: st
   }
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-5 sticky top-6">
-      <div className="font-medium mb-3">Ingest new artifact</div>
+    <div className="bg-white rounded-2xl border border-slate-200 p-5">
       <div className="space-y-3">
         <select value={artifactType} onChange={(e) => setArtifactType(e.target.value)} className="w-full border border-slate-300 rounded-md px-2.5 py-1.5 text-sm">
           {artifactTypes.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}

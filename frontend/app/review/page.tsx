@@ -1,4 +1,6 @@
 import { api } from "@/lib/api";
+import IconTile from "@/components/IconTile";
+import { Lock, TrendingUp, CalendarClock, Clock3, Info } from "lucide-react";
 import ReviewQueue from "./ReviewQueue";
 
 export const dynamic = "force-dynamic";
@@ -21,15 +23,22 @@ export default async function ClinicianReviewPage() {
   };
 
   return (
-    <div className="p-8 max-w-6xl mx-auto">
-      <h1 className="text-2xl font-semibold text-slate-900">Clinician Review</h1>
-      <p className="text-slate-500 mt-1">Queue of proposed consequential actions awaiting approval.</p>
+    <div className="p-8 max-w-7xl mx-auto">
+      <h1 className="text-xl font-semibold text-slate-900">Review Proposed Actions</h1>
+      <p className="text-slate-500 text-sm mt-1">CareThread ensures consequential actions are reviewed and approved by a clinician.</p>
 
-      <div className="grid grid-cols-4 gap-4 mt-6">
-        <Metric label="Proposed Closures" value={counts.closures} />
-        <Metric label="Proposed Escalations" value={counts.escalations} />
-        <Metric label="Proposed Extensions" value={counts.extensions} />
-        <Metric label="Awaiting Approval" value={counts.total} />
+      <div className="mt-5 flex items-start gap-2.5 bg-blue-50/60 border border-blue-100 rounded-2xl px-4 py-3">
+        <Info size={16} className="text-blue-600 shrink-0 mt-0.5" />
+        <p className="text-xs text-slate-600">
+          Clinician approval is required for all consequential actions. These actions may close threads, escalate care, or extend deadlines.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-4 gap-4 mt-5">
+        <Metric icon={Lock} tone="rose" label="Proposed Closures" value={counts.closures} />
+        <Metric icon={TrendingUp} tone="amber" label="Proposed Escalations" value={counts.escalations} />
+        <Metric icon={CalendarClock} tone="blue" label="Proposed Extensions" value={counts.extensions} />
+        <Metric icon={Clock3} tone="teal" label="Awaiting Approval" value={counts.total} />
       </div>
 
       <ReviewQueue items={enriched} />
@@ -37,11 +46,14 @@ export default async function ClinicianReviewPage() {
   );
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
+function Metric({ icon, tone, label, value }: { icon: React.ComponentType<{ size?: number }>; tone: "rose" | "amber" | "blue" | "teal"; label: string; value: number }) {
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-5">
-      <div className="text-2xl font-semibold text-slate-900">{value}</div>
-      <div className="text-xs text-slate-500 mt-1">{label}</div>
+    <div className="bg-white rounded-2xl border border-slate-200 p-5 flex items-center gap-4">
+      <IconTile icon={icon as never} tone={tone} size={40} />
+      <div>
+        <div className="text-2xl font-semibold text-slate-900">{value}</div>
+        <div className="text-xs text-slate-500">{label}</div>
+      </div>
     </div>
   );
 }
