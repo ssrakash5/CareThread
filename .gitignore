@@ -7,3 +7,10 @@ frontend/.next/
 frontend/.env.local
 *.pyc
 .DS_Store
+
+# internal planning docs — not for the public repo
+README.md
+project.md
+
+# raw dataset drop (large / not yet verified) — keep local only
+dataset/
