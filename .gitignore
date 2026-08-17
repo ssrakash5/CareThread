@@ -8,8 +8,7 @@ frontend/.env.local
 *.pyc
 .DS_Store
 
-# internal planning docs — not for the public repo
-README.md
+# internal planning doc — not for the public repo
 project.md
 
 # raw dataset drop (large / not yet verified) — keep local only
