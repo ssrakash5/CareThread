@@ -404,6 +404,10 @@ def seed():
                                 related_patient_id=michael.patient_id, relationship_type="CHILD"),
             FamilyRelationship(family_id=doe_family.family_id, patient_id=michael.patient_id,
                                 related_patient_id=jane.patient_id, relationship_type="PARENT"),
+            FamilyRelationship(family_id=doe_family.family_id, patient_id=susan.patient_id,
+                                related_patient_id=michael.patient_id, relationship_type="CHILD"),
+            FamilyRelationship(family_id=doe_family.family_id, patient_id=michael.patient_id,
+                                related_patient_id=susan.patient_id, relationship_type="PARENT"),
         ])
 
         # Susan shares Jane's exact finding (same type + location) so the family
