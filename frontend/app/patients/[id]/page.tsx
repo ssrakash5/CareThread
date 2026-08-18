@@ -4,9 +4,11 @@ import { api } from "@/lib/api";
 import { StatusBadge } from "@/components/Badges";
 import Avatar from "@/components/Avatar";
 import IconTile, { toneForArtifact } from "@/components/IconTile";
-import { Info, Sparkles, FileStack, MapPin, History as HistoryIcon } from "lucide-react";
+import { Info, Sparkles, FileStack, MapPin, History as HistoryIcon, Users, MessageCircleQuestion } from "lucide-react";
 import IngestForm from "./IngestForm";
 import PatientMemoryFilters from "./PatientMemoryFilters";
+import FamilyChat from "./FamilyChat";
+import PatientChat from "./PatientChat";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +35,10 @@ export default async function PatientMemoryPage({
     api.getPatientMemory(id, type),
     api.getPatientThreads(id),
   ]);
+  const family = await api.getPatientFamily(id).catch(() => null);
+  const heredityThread = family
+    ? threads.find((t) => t.thread_type === "HEREDITARY_RISK_REVIEW")
+    : undefined;
 
   return (
     <div className="p-8 max-w-6xl mx-auto">
@@ -106,6 +112,13 @@ export default async function PatientMemoryPage({
           </div>
 
           <div className="bg-white rounded-2xl border border-slate-200 p-5">
+            <div className="font-medium text-slate-800 flex items-center gap-2">
+              <MessageCircleQuestion size={15} className="text-teal-600" /> Ask about this patient
+            </div>
+            <PatientChat patientId={id} />
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-200 p-5">
             <div className="font-medium text-slate-800 mb-3 flex items-center gap-2">
               <MapPin size={15} className="text-slate-400" /> Key features
             </div>
@@ -115,6 +128,47 @@ export default async function PatientMemoryPage({
               <li className="flex gap-2"><HistoryIcon size={14} className="text-slate-400 shrink-0 mt-0.5" /> Every artifact is linked to its source and date.</li>
             </ul>
           </div>
+
+          {family && (
+            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              <div className="font-medium text-slate-800 mb-3 flex items-center gap-2">
+                <Users size={15} className="text-purple-600" /> Family
+              </div>
+              <ul className="text-sm text-slate-600 space-y-2">
+                {family.members
+                  .filter((m) => m.patient_id !== id)
+                  .map((m) => {
+                    const rel = family.relationships.find(
+                      (r) => r.patient_id === id && r.related_patient_id === m.patient_id
+                    );
+                    return (
+                      <li key={m.patient_id} className="flex items-center justify-between gap-2">
+                        <Link href={`/patients/${m.patient_id}`} className="hover:text-teal-600 truncate">
+                          {m.display_name}
+                        </Link>
+                        {rel && (
+                          <span className="text-xs text-slate-400 shrink-0">
+                            {rel.relationship_type.replace(/_/g, " ").toLowerCase()}
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
+                {family.members.length <= 1 && (
+                  <li className="text-slate-400 text-xs">No other members recorded.</li>
+                )}
+              </ul>
+              {heredityThread && (
+                <Link
+                  href={`/threads/${heredityThread.thread_id}`}
+                  className="mt-3 flex items-center gap-2 bg-purple-50 border border-purple-100 rounded-lg px-3 py-2 text-xs text-purple-700 hover:border-purple-300"
+                >
+                  Hereditary risk review flagged <StatusBadge status={heredityThread.status} />
+                </Link>
+              )}
+              <FamilyChat familyId={family.family_id} />
+            </div>
+          )}
 
           <div className="bg-blue-50/60 rounded-2xl border border-blue-100 p-4 flex gap-2.5">
             <Info size={15} className="text-blue-600 shrink-0 mt-0.5" />

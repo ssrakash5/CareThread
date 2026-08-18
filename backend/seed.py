@@ -16,10 +16,16 @@ from sqlalchemy import text, select
 
 from app.config import settings
 from app.db import SessionLocal, engine, Base, ensure_vector_support
-from app.models import Patient, ProposedAction, CareThread, Finding, ArtifactChunk, ThreadEvidence
+from app.models import (
+    Patient, ProposedAction, CareThread, Finding, ArtifactChunk, ThreadEvidence,
+    FamilyGroup, FamilyRelationship,
+)
 from app.ingestion.pipeline import ingest_artifact
 from app.workflows.approval_service import approve_action, _log_event
 from app.workflows.thread_state_machine import validate_transition
+from app.agents.family_agent import analyze_family
+from app.ingestion.pdf_utils import extract_text_from_pdf
+from demo_assets import make_pdf_bytes, make_ct_scan_png
 
 JANE_RADIOLOGY = """IMPRESSION:
 6 mm solid pulmonary nodule in the right upper lobe, incidentally noted.
@@ -95,6 +101,16 @@ Follow-up for left knee ACL partial tear. Pain improving with physical therapy.
 
 ASSESSMENT/PLAN:
 Continue PT. Re-image if symptoms worsen. No surgery planned at this time.
+"""
+
+JANE_PULMONOLOGY_CONSULT = """PULMONOLOGY CONSULT NOTE
+
+REASON FOR VISIT:
+Incidentally noted 6 mm right upper lobe pulmonary nodule, referred for surveillance planning.
+
+ASSESSMENT/PLAN:
+Nodule characteristics are low-risk per Fleischner criteria. Recommend follow-up CT chest
+in 6-12 months as previously advised. Patient counseled on smoking cessation resources.
 """
 
 ELENA_DERM_NOTE = """PROGRESS NOTE
@@ -223,9 +239,20 @@ def seed():
                          jurisdiction="US-CA", home_region="us-west-demo")
         linda = Patient(mrn="MRN-100237", display_name="Linda Patel", dob=date(1961, 6, 23),
                          jurisdiction="US-CA", home_region="us-west-demo")
-        db.add_all([jane, marcus, elena, robert, maria, james, linda])
+
+        # --- Family clusters (hereditary-risk demo) ---
+        susan = Patient(mrn="MRN-100238", display_name="Susan Doe", dob=date(1968, 8, 14),
+                         jurisdiction="US-CA", home_region="us-west-demo")
+        michael = Patient(mrn="MRN-100239", display_name="Michael Doe", dob=date(1938, 3, 5),
+                           jurisdiction="US-CA", home_region="us-west-demo")
+        diego = Patient(mrn="MRN-100240", display_name="Diego Alvarez", dob=date(1990, 5, 22),
+                         jurisdiction="US-CA", home_region="us-west-demo")
+        sofia = Patient(mrn="MRN-100241", display_name="Sofia Alvarez", dob=date(1993, 9, 9),
+                         jurisdiction="US-CA", home_region="us-west-demo")
+
+        db.add_all([jane, marcus, elena, robert, maria, james, linda, susan, michael, diego, sofia])
         db.flush()
-        for p in [jane, marcus, elena, robert, maria, james, linda]:
+        for p in [jane, marcus, elena, robert, maria, james, linda, susan, michael, diego, sofia]:
             print(f"{p.display_name} -> {p.patient_id}")
 
         # --- Jane Doe: full flagship lifecycle, driven by the real ingestion pipeline ---
@@ -270,6 +297,28 @@ def seed():
                          JANE_SCHEDULING_NOTE, date(2026, 6, 24), "Northwell Imaging")
         ingest_artifact(db, jane.patient_id, "PATIENT_MESSAGE", "Patient Portal Message",
                          JANE_MESSAGE, date(2026, 5, 10))
+        db.commit()
+
+        # --- Real PDF ingestion: generate a PDF, extract its text through the
+        # same path a real upload would use, then run it through the normal
+        # pipeline (chunk/embed/extract/match), storing the PDF bytes as the
+        # artifact of record. ---
+        consult_pdf = make_pdf_bytes("Pulmonology Consult Note", JANE_PULMONOLOGY_CONSULT)
+        consult_text = extract_text_from_pdf(consult_pdf)
+        r_pdf = ingest_artifact(db, jane.patient_id, "PROGRESS_NOTE", "Pulmonology Consult Note",
+                                 consult_text, date(2026, 4, 20), "Pulmonology Associates",
+                                 raw_bytes=consult_pdf, raw_ext="pdf", mime_type="application/pdf")
+        print("  Jane pulmonology consult (PDF) ->", r_pdf["proposed_actions"] or r_pdf["match_candidates"])
+        db.commit()
+
+        # --- CT scan images: reference artifacts only (spec section 3) — stored,
+        # captioned, and embedded for retrieval, never auto-interpreted. ---
+        jane_scan_png = make_ct_scan_png()
+        ingest_artifact(db, jane.patient_id, "IMAGE", "CT Chest - Axial Slice (RUL Nodule)",
+                         "Axial CT chest slice, right upper lobe, showing the 6 mm nodule referenced "
+                         "in the March 12 radiology report. Reference image only, not diagnostic.",
+                         date(2026, 3, 12), "Radiology Associates",
+                         raw_bytes=jane_scan_png, raw_ext="png", mime_type="image/png")
         db.commit()
 
         # Follow-up CT arrives and matches — leave the resulting actions PENDING so
@@ -338,6 +387,97 @@ def seed():
         )
 
         db.commit()
+
+        # --- Family cluster 1: Doe family — hereditary pattern to flag ---
+        doe_family = FamilyGroup(family_name="Doe Family")
+        db.add(doe_family)
+        db.flush()
+        jane.family_id = doe_family.family_id
+        susan.family_id = doe_family.family_id
+        michael.family_id = doe_family.family_id
+        db.add_all([
+            FamilyRelationship(family_id=doe_family.family_id, patient_id=jane.patient_id,
+                                related_patient_id=susan.patient_id, relationship_type="SIBLING"),
+            FamilyRelationship(family_id=doe_family.family_id, patient_id=susan.patient_id,
+                                related_patient_id=jane.patient_id, relationship_type="SIBLING"),
+            FamilyRelationship(family_id=doe_family.family_id, patient_id=jane.patient_id,
+                                related_patient_id=michael.patient_id, relationship_type="CHILD"),
+            FamilyRelationship(family_id=doe_family.family_id, patient_id=michael.patient_id,
+                                related_patient_id=jane.patient_id, relationship_type="PARENT"),
+        ])
+
+        # Susan shares Jane's exact finding (same type + location) so the family
+        # agent has a genuine cross-relative pattern to detect.
+        build_demo_thread(
+            db, susan,
+            finding_type="PULMONARY_NODULE", location="RIGHT_UPPER_LOBE",
+            description="5 mm solid pulmonary nodule in the right upper lobe, incidentally noted; recommend follow-up CT in 6-12 months.",
+            thread_type="INCIDENTAL_PULMONARY_FOLLOWUP", title="Incidental Pulmonary Nodule Follow-up",
+            artifact_type="RADIOLOGY_REPORT", artifact_title="CT Chest Without Contrast",
+            artifact_text="IMPRESSION:\n5 mm solid pulmonary nodule in the right upper lobe, incidentally noted. "
+                          "Follow-up CT chest recommended in 6-12 months.",
+            document_date=date(2026, 4, 2), source_provider="Radiology Associates",
+            owner="katherine_lee", priority="ROUTINE", due_at=today + timedelta(days=180),
+            target_status="IN_PROGRESS",
+        )
+        susan_scan_png = make_ct_scan_png(nodule_position=(0.6, 0.44))
+        ingest_artifact(db, susan.patient_id, "IMAGE", "CT Chest - Axial Slice (RUL Nodule)",
+                         "Axial CT chest slice, right upper lobe, showing Susan's 5 mm nodule. "
+                         "Reference image only, not diagnostic.",
+                         date(2026, 4, 2), "Radiology Associates",
+                         raw_bytes=susan_scan_png, raw_ext="png", mime_type="image/png")
+        db.commit()
+
+        doe_pairs = analyze_family(db, doe_family.family_id)
+        for hered_thread, hered_action in doe_pairs:
+            db.add(hered_thread)
+            db.flush()
+            hered_action.thread_id = hered_thread.thread_id
+            db.add(hered_action)
+            db.flush()
+            approve_action(db, hered_action, reviewer_id="dr_kapoor")
+        db.commit()
+        print(f"Doe family hereditary-risk flags: {len(doe_pairs)}")
+
+        # --- Family cluster 2: Alvarez family — contrast case, no shared pattern ---
+        alvarez_family = FamilyGroup(family_name="Alvarez Family")
+        db.add(alvarez_family)
+        db.flush()
+        diego.family_id = alvarez_family.family_id
+        sofia.family_id = alvarez_family.family_id
+        db.add_all([
+            FamilyRelationship(family_id=alvarez_family.family_id, patient_id=diego.patient_id,
+                                related_patient_id=sofia.patient_id, relationship_type="SIBLING"),
+            FamilyRelationship(family_id=alvarez_family.family_id, patient_id=sofia.patient_id,
+                                related_patient_id=diego.patient_id, relationship_type="SIBLING"),
+        ])
+
+        build_demo_thread(
+            db, diego,
+            finding_type="THYROID_NODULE", location="LEFT_THYROID_LOBE",
+            description="1.2 cm left thyroid nodule, incidentally noted; recommend ultrasound follow-up in 6 months.",
+            thread_type="THYROID_FOLLOWUP", title="Thyroid Nodule",
+            artifact_type="RADIOLOGY_REPORT", artifact_title="Neck Ultrasound",
+            artifact_text="IMPRESSION:\n1.2 cm left thyroid nodule. Recommend follow-up ultrasound in 6 months.",
+            document_date=date(2026, 5, 11), source_provider="Radiology Associates",
+            owner="andrew_chen", priority="ROUTINE", due_at=today + timedelta(days=30),
+            target_status="IN_PROGRESS",
+        )
+        build_demo_thread(
+            db, sofia,
+            finding_type="RENAL_CYST", location="RIGHT_KIDNEY",
+            description="1.6 cm simple right renal cyst, incidentally noted; recommend surveillance in 12 months.",
+            thread_type="RENAL_FOLLOWUP", title="Renal Cyst",
+            artifact_type="RADIOLOGY_REPORT", artifact_title="Renal Ultrasound",
+            artifact_text="IMPRESSION:\n1.6 cm simple right renal cyst. Recommend surveillance imaging in 12 months.",
+            document_date=date(2026, 5, 14), source_provider="Radiology Associates",
+            owner="andrew_chen", priority="ROUTINE", due_at=today + timedelta(days=45),
+            target_status="IN_PROGRESS",
+        )
+        db.commit()
+
+        alvarez_pairs = analyze_family(db, alvarez_family.family_id)
+        print(f"Alvarez family hereditary-risk flags: {len(alvarez_pairs)} (expected 0 — no shared pattern)")
 
         thread = db.get(CareThread, thread_id)
         print(f"\nJane Doe flagship thread status: {thread.status}")

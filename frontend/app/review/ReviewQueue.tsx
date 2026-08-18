@@ -147,7 +147,7 @@ export default function ReviewQueue({ items }: { items: Item[] }) {
           </div>
           <div>
             <div className="text-xs text-slate-400">Requested on</div>
-            <div className="text-slate-700 mt-0.5">{new Date(item.action.created_at).toLocaleDateString()}</div>
+            <div className="text-slate-700 mt-0.5">{new Date(item.action.created_at).toLocaleDateString("en-US")}</div>
           </div>
         </div>
 

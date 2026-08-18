@@ -46,6 +46,21 @@ def embed_text_bedrock(text: str) -> List[float]:
     return json.loads(resp["body"].read())["embedding"]
 
 
+def chat_reply(*, system: str, user: str, max_tokens: int = 800) -> str:
+    """Plain-text Claude reply (no forced tool-use) — used for the grounded
+    family-history Q&A chat, where the answer is prose, not a JSON payload."""
+    resp = claude_client().messages.create(
+        model=settings.bedrock_model_id,
+        max_tokens=max_tokens,
+        system=system,
+        messages=[{"role": "user", "content": user}],
+    )
+    if resp.stop_reason == "refusal":
+        raise RuntimeError("Bedrock/Claude refused the request")
+    parts = [block.text for block in resp.content if block.type == "text"]
+    return "\n".join(parts).strip()
+
+
 def structured_call(
     *,
     system: str,

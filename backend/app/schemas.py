@@ -128,6 +128,63 @@ class RejectRequest(BaseModel):
     reason: str = ""
 
 
+class FamilyMemberOut(BaseModel):
+    patient_id: str
+    display_name: str
+    mrn: str
+
+    class Config:
+        from_attributes = True
+
+
+class FamilyRelationshipOut(BaseModel):
+    relationship_id: str
+    patient_id: str
+    related_patient_id: str
+    relationship_type: str
+    notes: str
+
+    class Config:
+        from_attributes = True
+
+
+class FamilyOut(BaseModel):
+    family_id: str
+    family_name: str
+    members: List[FamilyMemberOut]
+    relationships: List[FamilyRelationshipOut]
+
+
+class FamilyChatMessageOut(BaseModel):
+    message_id: str
+    family_id: str
+    role: str
+    content: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class FamilyChatRequest(BaseModel):
+    question: str
+
+
+class PatientChatMessageOut(BaseModel):
+    message_id: str
+    patient_id: str
+    role: str
+    content: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class PatientChatRequest(BaseModel):
+    question: str
+
+
 class IngestResult(BaseModel):
     artifact_id: str
     chunks_created: int

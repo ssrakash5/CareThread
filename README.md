@@ -191,6 +191,51 @@ Model IDs are configuration (`CARETHREAD_BEDROCK_MODEL_ID`,
 `CARETHREAD_BEDROCK_EMBED_MODEL_ID`); switching to a newer Claude once your
 AWS account has access is a one-line `.env` change.
 
+## Family clusters (hereditary risk)
+
+Patients can be grouped into a `FamilyGroup` with typed `FamilyRelationship`
+rows (PARENT/CHILD/SIBLING). `app/agents/family_agent.py::analyze_family` is
+the one sanctioned cross-patient read in the system — scoped to one
+consented family, never across unrelated patients — and flags when ≥2 blood
+relatives share the same `finding_type` + `anatomical_location` (e.g. the
+same nodule location). It never diagnoses or writes state directly: it
+proposes an `OPEN_THREAD` action for a `HEREDITARY_RISK_REVIEW` thread,
+which flows through the existing approval machinery unchanged. Endpoints:
+`GET /patients/{id}/family`, `GET /families/{id}`,
+`POST /families/{id}/analyze`. `seed.py` includes two demo clusters — the
+Doe family (Jane + Susan share a right-upper-lobe nodule → flagged) and the
+Alvarez family (unrelated finding types → correctly not flagged).
+
+## PDF and image ingestion
+
+The pipeline isn't text-only: `ingest_artifact(..., raw_bytes=..., raw_ext=...,
+mime_type=...)` stores the original binary (PDF or image) as the artifact of
+record while still chunking/embedding/extracting from `text`.
+`app/ingestion/pdf_utils.py` extracts text from real PDFs (`pypdf`) so a PDF
+upload runs through the exact same extraction/matching path as a pasted
+report. `IMAGE` artifacts (spec section 3: reference artifacts only, never
+auto-interpreted) get their caption chunked + embedded for retrieval, but
+skip fact/finding extraction and thread matching entirely.
+`backend/demo_assets.py` generates a real demo PDF (via `reportlab`) and
+placeholder CT-scan-style PNGs (via `Pillow`) that `seed.py` ingests for
+Jane and Susan — not real imaging data, just enough to exercise binary
+storage + pgvector embedding end to end.
+
+## Testing
+
+```
+cd backend
+pytest              # default suite: mock/local provider only, no AWS calls
+pytest -m bedrock   # opt-in: exercises real Bedrock (needs backend/.env credentials)
+```
+
+`tests/conftest.py` drops + recreates the schema against whatever database
+`backend/.env` points at (same "demo DB, no migrations" policy as
+`seed.py`) — don't point it at a database you care about keeping.
+`tests/test_e2e_mock.py` walks the full MVP definition-of-done sequence
+(spec section 33) through the HTTP API; `tests/test_family_agent.py` covers
+the hereditary-risk flag and its false-positive-avoidance case.
+
 ## What's mocked / deferred
 
 - **Auth**: demo RBAC via `X-User-Id` / `X-User-Role` headers
@@ -201,14 +246,16 @@ AWS account has access is a one-line `.env` change.
 
 ```
 backend/app/
-  models/        SQLAlchemy ORM — patients, artifacts, findings, threads, evidence, actions, events
+  models/        SQLAlchemy ORM — patients, artifacts, findings, threads, evidence, actions, events, family
   ai/            AWS integrations — bedrock.py (Claude + Titan clients), extraction.py,
-                 matching.py (LLM judge), storage.py (S3)
-  ingestion/     chunking, provider dispatch for extraction/embeddings, pipeline orchestration
-  agents/        matching_agent (rule signals + Claude judge), action_agent (proposals)
+                 matching.py (LLM judge), storage.py (S3 + local binary storage)
+  ingestion/     chunking, provider dispatch for extraction/embeddings, pdf_utils.py, pipeline orchestration
+  agents/        matching_agent (rule signals + Claude judge), action_agent, family_agent (hereditary risk)
   workflows/      thread_state_machine, approval_service (the only state mutator)
-  api/            FastAPI routers
+  api/            FastAPI routers (incl. families.py)
   security/       demo RBAC
-backend/seed.py   synthetic demo dataset (Jane Doe flagship case + several distractor/variety patients)
+backend/seed.py   synthetic demo dataset (Jane Doe flagship case, family clusters, PDF/image artifacts)
+backend/demo_assets.py  synthetic PDF/CT-scan-image generators used by seed.py
+backend/tests/    pytest suite — mock e2e walk, family-agent tests, opt-in Bedrock tests
 frontend/app/     Next.js screens (dashboard, threads, evidence, patients, review)
 ```

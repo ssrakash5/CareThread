@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.models import Artifact, ArtifactChunk, Fact, Finding, CareThread, ProposedAction
 from app.ingestion.extractors import chunk_text, extract_document, ExtractedFact
 from app.ingestion.embeddings import embed_text
-from app.ai.storage import store_raw
+from app.ai.storage import store_raw, store_bytes
 from app.agents.matching_agent import find_candidate_threads
 from app.agents.action_agent import propose_thread as agent_propose_thread, propose_closure as agent_propose_closure
 
@@ -32,8 +32,20 @@ def ingest_artifact(
     document_date: date,
     source_provider: str = "",
     auto_propose_threads: bool = True,
+    raw_bytes: bytes | None = None,
+    raw_ext: str = "",
+    mime_type: str = "text/plain",
 ) -> dict:
-    s3_uri = store_raw(patient_id, artifact_type, title, text)
+    """``text`` drives chunking/extraction/matching regardless of source. If
+    ``raw_bytes`` is given (e.g. an uploaded PDF or image), those bytes are
+    stored as the artifact of record instead of ``text`` — ``text`` should
+    then be the already-extracted document text (PDFs) or a human-written
+    caption (images; per spec section 3, images are reference artifacts
+    only and are never auto-interpreted)."""
+    if raw_bytes is not None:
+        s3_uri = store_bytes(patient_id, artifact_type, title, raw_bytes, raw_ext, mime_type)
+    else:
+        s3_uri = store_raw(patient_id, artifact_type, title, text)
 
     artifact = Artifact(
         patient_id=patient_id,
@@ -41,6 +53,7 @@ def ingest_artifact(
         source_provider=source_provider,
         document_date=document_date,
         s3_uri=s3_uri,
+        mime_type=mime_type,
         title=title,
         status="PROCESSING",
     )
@@ -67,6 +80,20 @@ def ingest_artifact(
         chunk_embeddings.append(embedding)
     db.flush()
     first_chunk_id = chunk_rows[0].chunk_id if chunk_rows else None
+
+    # Images are reference artifacts only (spec section 3): the caption gets
+    # chunked + embedded above for retrieval, but pixel content is never
+    # auto-interpreted, so no fact/finding extraction or thread matching runs.
+    if artifact_type == "IMAGE":
+        artifact.status = "PROCESSED"
+        return {
+            "artifact_id": artifact.artifact_id,
+            "chunks_created": len(chunk_rows),
+            "facts_extracted": [],
+            "findings_extracted": [],
+            "proposed_actions": [],
+            "match_candidates": [],
+        }
 
     # --- extract facts + findings (Claude on Bedrock, or local regex) --------
     extraction = extract_document(text, artifact_type)

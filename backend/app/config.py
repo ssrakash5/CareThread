@@ -1,6 +1,18 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 
+# Some environments (notably antivirus/corporate HTTPS-scanning proxies, e.g.
+# AVG's "Web Shield") terminate TLS with their own root certificate. The OS
+# trust store accepts it (curl/browsers work fine) but Python's default
+# certifi bundle doesn't, so boto3/anthropic calls to AWS fail with
+# CERTIFICATE_VERIFY_FAILED. truststore patches the ssl module to use the OS
+# certificate store instead, fixing that without disabling verification.
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
+
 _BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 

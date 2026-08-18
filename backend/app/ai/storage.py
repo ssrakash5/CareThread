@@ -45,3 +45,33 @@ def store_raw(patient_id: str, artifact_type: str, title: str, text: str) -> str
         except Exception as e:  # noqa: BLE001 — never lose an ingest over storage
             log.warning("S3 upload failed (%s); storing locally instead", e)
     return store_raw_local(patient_id, artifact_type, title, text)
+
+
+def store_bytes_local(patient_id: str, artifact_type: str, title: str, data: bytes, ext: str) -> str:
+    subdir = Path(settings.storage_dir) / patient_id / artifact_type.lower()
+    subdir.mkdir(parents=True, exist_ok=True)
+    path = subdir / f"{_safe(title)}.{ext}"
+    path.write_bytes(data)
+    return f"local://{path.relative_to(Path(settings.storage_dir).parent)}"
+
+
+def store_bytes_s3(patient_id: str, artifact_type: str, title: str, data: bytes, ext: str, content_type: str) -> str:
+    key = f"{settings.s3_prefix}/{patient_id}/{artifact_type.lower()}/{_safe(title)}.{ext}"
+    _s3().put_object(
+        Bucket=settings.s3_bucket,
+        Key=key,
+        Body=data,
+        ContentType=content_type,
+        ServerSideEncryption="AES256",
+    )
+    return f"s3://{settings.s3_bucket}/{key}"
+
+
+def store_bytes(patient_id: str, artifact_type: str, title: str, data: bytes, ext: str, content_type: str) -> str:
+    """Raw binary artifacts (PDFs, images) — same S3-with-local-fallback policy as store_raw."""
+    if settings.s3_bucket:
+        try:
+            return store_bytes_s3(patient_id, artifact_type, title, data, ext, content_type)
+        except Exception as e:  # noqa: BLE001
+            log.warning("S3 upload failed (%s); storing locally instead", e)
+    return store_bytes_local(patient_id, artifact_type, title, data, ext)

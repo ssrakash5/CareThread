@@ -56,6 +56,43 @@ export interface ThreadEvidence {
   linked_at: string;
 }
 
+export interface FamilyMember {
+  patient_id: string;
+  display_name: string;
+  mrn: string;
+}
+
+export interface FamilyRelationship {
+  relationship_id: string;
+  patient_id: string;
+  related_patient_id: string;
+  relationship_type: string;
+  notes: string;
+}
+
+export interface Family {
+  family_id: string;
+  family_name: string;
+  members: FamilyMember[];
+  relationships: FamilyRelationship[];
+}
+
+export interface FamilyChatMessage {
+  message_id: string;
+  family_id: string;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+}
+
+export interface PatientChatMessage {
+  message_id: string;
+  patient_id: string;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+}
+
 export interface ProposedAction {
   action_id: string;
   thread_id: string;

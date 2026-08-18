@@ -47,7 +47,7 @@ export default async function HistoryPage({ params }: { params: Promise<{ id: st
                 <li key={ev.event_id} className="ml-6">
                   <span className="absolute -left-[7px] flex h-3.5 w-3.5 items-center justify-center rounded-full bg-teal-500 ring-4 ring-white" />
                   <div className="text-xs text-slate-400">
-                    {new Date(ev.created_at).toLocaleDateString(undefined, { month: "short", day: "2-digit", year: "numeric" })}
+                    {new Date(ev.created_at).toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" })}
                   </div>
                   <div className="font-medium text-slate-800 mt-0.5">{formatEvent(ev.event_type)}</div>
                   <div className="text-xs text-slate-500 mt-0.5">

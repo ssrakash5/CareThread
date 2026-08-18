@@ -102,7 +102,7 @@ export default async function ThreadDetailPage({ params }: { params: Promise<{ i
               {timeline.map((ev) => (
                 <li key={ev.event_id} className="ml-6">
                   <span className={`absolute -left-[9px] flex h-4 w-4 items-center justify-center rounded-full ring-4 ring-white ${EVENT_DOT_CLASS[ev.event_type] ?? DEFAULT_DOT_CLASS}`} />
-                  <div className="text-xs text-slate-400">{new Date(ev.created_at).toLocaleString()}</div>
+                  <div className="text-xs text-slate-400">{new Date(ev.created_at).toLocaleString("en-US")}</div>
                   <div className="font-medium text-slate-800 mt-0.5">{ev.event_type.replace(/_/g, " ")}</div>
                   <div className="text-xs text-slate-500 mt-0.5">
                     {ev.actor_type === "care_agent" ? "CareThread agent" : `${ev.actor_id.replace(/_/g, " ")}`}

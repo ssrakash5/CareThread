@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, date
 
-from sqlalchemy import String, Date, DateTime
+from sqlalchemy import String, Date, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -16,5 +16,6 @@ class Patient(Base):
     dob: Mapped[date] = mapped_column(Date)
     jurisdiction: Mapped[str] = mapped_column(String, default="US-GENERIC")
     home_region: Mapped[str] = mapped_column(String, default="us-demo")
+    family_id: Mapped[str] = mapped_column(String, ForeignKey("family_groups.family_id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
