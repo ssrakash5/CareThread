@@ -10,8 +10,23 @@ from app.schemas import (
 )
 from app.security.roles import get_current_user, require_approval_role, CurrentUser
 from app.workflows.approval_service import _log_event
+from app.agents.followup_agent import propose_escalations
 
 router = APIRouter(prefix="/threads", tags=["threads"])
+
+
+@router.post("/check-overdue", response_model=list[ProposedActionOut])
+def check_overdue(db: Session = Depends(get_db)):
+    """Runs the follow-up agent: scans all open threads for ones past their
+    due date and proposes ESCALATE_THREAD (PENDING, requires clinician
+    approval like every other agent action)."""
+    actions = propose_escalations(db)
+    for a in actions:
+        db.add(a)
+    db.commit()
+    for a in actions:
+        db.refresh(a)
+    return actions
 
 
 @router.get("", response_model=list[ThreadOut])

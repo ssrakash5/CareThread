@@ -5,6 +5,7 @@ import Avatar from "@/components/Avatar";
 import Ring from "@/components/Ring";
 import IconTile, { toneForTitle } from "@/components/IconTile";
 import { CheckCircle2, Inbox, FileClock, AlertTriangle, FileCheck2, Stethoscope } from "lucide-react";
+import CheckOverdueButton from "./CheckOverdueButton";
 
 export const dynamic = "force-dynamic";
 
@@ -33,8 +34,13 @@ export default async function DashboardPage() {
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
-      <h1 className="text-2xl font-semibold text-slate-900">Dashboard</h1>
-      <p className="text-slate-500 mt-1 text-sm">Operational inbox for unresolved care obligations.</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-slate-900">Dashboard</h1>
+          <p className="text-slate-500 mt-1 text-sm">Operational inbox for unresolved care obligations.</p>
+        </div>
+        <CheckOverdueButton />
+      </div>
 
       <div className="grid grid-cols-4 gap-4 mt-6">
         <StatTile icon={Inbox} label="Open Threads" value={openThreads.length} tone="blue" />

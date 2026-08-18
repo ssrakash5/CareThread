@@ -26,6 +26,15 @@ def _log_event(db: Session, thread_id: str, patient_id: str, event_type: str,
     ))
 
 
+def _path_to_overdue(current: str) -> list[str]:
+    routes = {
+        "OPEN": ["IN_PROGRESS", "AWAITING_EVIDENCE", "OVERDUE"],
+        "IN_PROGRESS": ["AWAITING_EVIDENCE", "OVERDUE"],
+        "AWAITING_EVIDENCE": ["OVERDUE"],
+    }
+    return routes.get(current, [])
+
+
 def approve_action(db: Session, action: ProposedAction, reviewer_id: str) -> ProposedAction:
     action.status = "APPROVED"
     action.reviewed_at = datetime.utcnow()
@@ -71,6 +80,14 @@ def approve_action(db: Session, action: ProposedAction, reviewer_id: str) -> Pro
 
     elif action.action_type == "ESCALATE_THREAD":
         thread = db.get(CareThread, action.thread_id)
+        # ESCALATED is only reachable from OVERDUE (thread_state_machine.py); step
+        # the thread through AWAITING_EVIDENCE -> OVERDUE first if needed, same
+        # one-approval-does-multiple-transitions pattern as CLOSE_THREAD below.
+        for step in _path_to_overdue(thread.status):
+            validate_transition(thread.status, step)
+            prev = thread.status
+            thread.status = step
+            _log_event(db, thread.thread_id, thread.patient_id, f"THREAD_{step}", "care_agent", prev, step)
         validate_transition(thread.status, "ESCALATED")
         prev = thread.status
         thread.status = "ESCALATED"

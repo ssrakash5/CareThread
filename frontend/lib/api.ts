@@ -57,6 +57,7 @@ export const api = {
     req<CareThread>(`/threads/${id}/extend`, { method: "POST", body: JSON.stringify({ new_due_at, reason }) }),
   escalate: (id: string, reason = "") =>
     req<CareThread>(`/threads/${id}/escalate`, { method: "POST", body: JSON.stringify({ reason }) }),
+  checkOverdue: () => req<ProposedAction[]>(`/threads/check-overdue`, { method: "POST" }),
 
   listActions: (status = "PENDING") => req<ProposedAction[]>(`/actions?status=${status}`),
   approveAction: (id: string) => req<ProposedAction>(`/actions/${id}/approve`, { method: "POST" }),
