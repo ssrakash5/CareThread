@@ -1,11 +1,37 @@
 # CareThread
 
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
 CareThread is a jurisdiction-aware care-continuity agent. It watches
 clinical documentation for follow-up obligations that get recommended and
 then quietly dropped — most commonly an incidental finding on imaging that
 never makes it into the discharge paperwork — and keeps that obligation
 alive as an auditable case until a clinician confirms it's actually been
 resolved.
+
+---
+
+## Contents
+
+- [The problem](#the-problem)
+- [What CareThread does](#what-carethread-does)
+- [What it deliberately does not do](#what-it-deliberately-does-not-do)
+- [Architecture](#architecture)
+- [Current scope](#current-scope)
+- [AWS services used](#aws-services-used)
+- [Prerequisites](#prerequisites)
+- [Run it](#run-it)
+- [Configuration](#configuration-backendenv)
+- [What's implemented](#whats-implemented)
+- [AI pipeline (Bedrock)](#ai-pipeline-bedrock)
+- [Family clusters (hereditary risk)](#family-clusters-hereditary-risk)
+- [PDF and image ingestion](#pdf-and-image-ingestion)
+- [Testing](#testing)
+- [What's mocked / deferred](#whats-mocked--deferred)
+- [Layout](#layout)
+- [License](#license)
+
+---
 
 ## The problem
 
@@ -37,6 +63,72 @@ its own. It coordinates follow-up based on clinician-authored evidence —
 it's a memory and accountability layer for care obligations, not a
 diagnostic tool.
 
+---
+
+## Architecture
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'background': '#ffffff', 'mainBkg': '#f8fafb', 'primaryColor': '#e8f2f4', 'primaryTextColor': '#1e293b', 'primaryBorderColor': '#64748b', 'secondaryColor': '#f1f5f9', 'tertiaryColor': '#ffffff', 'lineColor': '#94a3b8'}, 'flowchart': {'nodeSpacing': 45, 'rankSpacing': 65, 'curve': 'basis'}}}%%
+flowchart TB
+    Clinician([Clinician])
+    UI[Clinician Interface]
+    API[API Layer]
+    Ingest[Ingestion Pipeline]
+    Review[Review]
+
+    Clinician --> UI --> API
+    API --> Ingest
+    API --> Review
+
+    subgraph Agents[Agent Layer]
+        direction LR
+        Action[Action Agent]
+        Match[Matching Agent]
+        Follow[Follow Up Agent]
+        Family[Family Agent]
+    end
+
+    Ingest --> Action
+    Ingest --> Match
+    API --> Follow
+    API --> Family
+
+    Store[Document Store]
+    Queue[Proposal Queue]
+    Approve[Approval Service]
+    Audit[Audit Log]
+    Memory[(Persistent Memory)]
+
+    Ingest --> Store
+    Agents --> Queue
+    Review --> Queue
+
+    Queue --> Approve
+    Approve --> Audit
+    Approve --> Memory
+    Ingest --> Memory
+    Agents --> Memory
+```
+
+| Component | Responsibility |
+|---|---|
+| **Clinician Interface** | Upload documents, review proposals, approve or reject actions, inspect history |
+| **API Layer** | Routes requests, enforces access rules, coordinates ingestion and review |
+| **Ingestion Pipeline** | Store raw documents, extract text, chunk content, derive facts and findings |
+| **Action Agent** | Detects care gaps and proposes opening or closing threads |
+| **Matching Agent** | Links new documents to open obligations with scored evidence matches |
+| **Follow Up Agent** | Scans overdue threads and proposes escalation |
+| **Family Agent** | Flags hereditary risk patterns across consented relatives |
+| **Proposal Queue** | Holds pending actions until a clinician decides |
+| **Approval Service** | Sole path for state changes; validates transitions before writing |
+| **Persistent Memory** | Obligations, evidence links, embeddings, structured clinical facts |
+| **Audit Log** | Immutable record of every proposal, approval, rejection, and state change |
+
+Every agent only ever proposes; the Approval Service is the single place
+that mutates state, and every mutation is written to the Audit Log.
+
+---
+
 ## Current scope
 
 The MVP focuses on one workflow end to end: incidental pulmonary nodule
@@ -65,6 +157,8 @@ demo never hard-stops on a network blip (a warning is logged).
 The database is **CockroachDB Cloud** (a Cockroach Labs service running on
 AWS `us-east-1`); local Postgres + pgvector works as a drop-in alternative.
 No AWS compute/deployment layer yet — backend and frontend run locally.
+
+---
 
 ## Prerequisites
 
@@ -146,6 +240,8 @@ Every Bedrock/S3 call falls back to its local implementation on error and
 logs a warning, so a network blip degrades quality rather than failing an
 ingest.
 
+---
+
 ## What's implemented
 
 Full MVP loop from the spec, end to end, driven by the seed script and
@@ -221,6 +317,8 @@ placeholder CT-scan-style PNGs (via `Pillow`) that `seed.py` ingests for
 Jane and Susan — not real imaging data, just enough to exercise binary
 storage + pgvector embedding end to end.
 
+---
+
 ## Testing
 
 ```
@@ -259,3 +357,10 @@ backend/demo_assets.py  synthetic PDF/CT-scan-image generators used by seed.py
 backend/tests/    pytest suite — mock e2e walk, family-agent tests, opt-in Bedrock tests
 frontend/app/     Next.js screens (dashboard, threads, evidence, patients, review)
 ```
+
+---
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for
+the full text.
