@@ -1,15 +1,48 @@
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Response
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Patient
-from app.schemas import ArtifactIngest, IngestResult
+from app.models import Patient, Artifact, Fact, ArtifactChunk
+from app.schemas import ArtifactIngest, ArtifactOut, ArtifactDetailOut, IngestResult
 from app.ingestion.pipeline import ingest_artifact
 from app.ingestion.pdf_utils import extract_text_from_pdf
+from app.ai.storage import fetch_raw
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
+
+
+@router.get("/{artifact_id}", response_model=ArtifactDetailOut)
+def get_artifact(artifact_id: str, db: Session = Depends(get_db)):
+    artifact = db.get(Artifact, artifact_id)
+    if not artifact:
+        raise HTTPException(404, "Artifact not found")
+    facts = db.execute(select(Fact).where(Fact.artifact_id == artifact_id)).scalars().all()
+    chunks = db.execute(
+        select(ArtifactChunk).where(ArtifactChunk.artifact_id == artifact_id).order_by(ArtifactChunk.chunk_index)
+    ).scalars().all()
+    base = ArtifactOut.model_validate(artifact).model_dump()
+    return ArtifactDetailOut(
+        **base,
+        mime_type=artifact.mime_type,
+        facts=facts,
+        chunks=[c.chunk_text for c in chunks],
+        has_file=artifact.mime_type != "text/plain",
+    )
+
+
+@router.get("/{artifact_id}/file")
+def get_artifact_file(artifact_id: str, db: Session = Depends(get_db)):
+    artifact = db.get(Artifact, artifact_id)
+    if not artifact:
+        raise HTTPException(404, "Artifact not found")
+    try:
+        data = fetch_raw(artifact.s3_uri)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(404, f"Could not read stored file: {e}")
+    return Response(content=data, media_type=artifact.mime_type)
 
 
 @router.post("/{patient_id}", response_model=IngestResult)

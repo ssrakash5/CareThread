@@ -34,7 +34,7 @@ Rules:
 - Keep answers concise and clinician-readable."""
 
 
-def _build_context(db: Session, patient_id: str) -> str:
+def build_context(db: Session, patient_id: str) -> str:
     patient = db.get(Patient, patient_id)
     artifacts = db.execute(
         select(Artifact).where(Artifact.patient_id == patient_id).order_by(Artifact.document_date.asc())
@@ -76,7 +76,7 @@ def _local_fallback(context: str, question: str) -> str:
 
 
 def answer_patient_question(db: Session, patient_id: str, question: str) -> str:
-    context = _build_context(db, patient_id)
+    context = build_context(db, patient_id)
     if settings.ai_provider != "bedrock":
         return _local_fallback(context, question)
     try:

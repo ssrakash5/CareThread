@@ -3,12 +3,13 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { StatusBadge } from "@/components/Badges";
 import Avatar from "@/components/Avatar";
-import IconTile, { toneForArtifact } from "@/components/IconTile";
-import { Info, Sparkles, FileStack, MapPin, History as HistoryIcon, Users, MessageCircleQuestion } from "lucide-react";
+import { Info, Sparkles, MapPin, History as HistoryIcon, Users, MessageCircleQuestion } from "lucide-react";
 import IngestForm from "./IngestForm";
 import PatientMemoryFilters from "./PatientMemoryFilters";
 import FamilyChat from "./FamilyChat";
 import PatientChat from "./PatientChat";
+import ArtifactList from "./ArtifactList";
+import PatientSummary from "./PatientSummary";
 
 export const dynamic = "force-dynamic";
 
@@ -45,13 +46,14 @@ export default async function PatientMemoryPage({
       <h1 className="text-xl font-semibold text-slate-900">Patient Memory</h1>
       <p className="text-slate-500 text-sm mt-1">Longitudinal evidence repository for this patient.</p>
 
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 mt-5 flex items-center gap-4">
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 mt-5 flex items-start gap-4">
         <Avatar name={patient.display_name} size={44} />
         <div className="flex-1">
           <div className="font-semibold text-slate-900">{patient.display_name}</div>
           <div className="text-xs text-slate-500 mt-0.5">
             MRN {patient.mrn} · DOB {patient.dob} · {patient.jurisdiction}
           </div>
+          <PatientSummary patientId={id} />
         </div>
         {threads.length > 0 && (
           <div className="hidden md:flex flex-wrap gap-2 max-w-md justify-end">
@@ -67,25 +69,7 @@ export default async function PatientMemoryPage({
       <div className="grid grid-cols-3 gap-6 mt-6 items-start">
         <div className="col-span-2">
           <PatientMemoryFilters types={ARTIFACT_TYPES} active={type} />
-          <div className="mt-3 bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100">
-            {artifacts.map((a) => (
-              <div key={a.artifact_id} className="flex items-center gap-3 px-4 py-3">
-                <IconTile icon={FileStack} tone={toneForArtifact(a.artifact_type)} size={34} />
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium text-slate-800 text-sm truncate">{a.title}</div>
-                  <div className="text-xs text-slate-500 mt-0.5">
-                    {a.artifact_type.replace(/_/g, " ")} · {a.source_provider || "Unknown source"}
-                  </div>
-                </div>
-                <div className="text-xs text-slate-400 shrink-0">{a.document_date}</div>
-              </div>
-            ))}
-            {artifacts.length === 0 && (
-              <div className="p-8 text-center text-slate-400 text-sm">
-                No artifacts{type ? ` of type ${type}` : ""} for this patient yet.
-              </div>
-            )}
-          </div>
+          <ArtifactList artifacts={artifacts} activeType={type} />
 
           <div className="mt-6">
             <div className="font-medium text-slate-800 mb-3 text-sm">Ingest new artifact</div>

@@ -47,6 +47,24 @@ class ArtifactOut(BaseModel):
         from_attributes = True
 
 
+class FactOut(BaseModel):
+    fact_id: str
+    fact_type: str
+    fact_text: str
+    normalized_value: str
+    confidence: float
+
+    class Config:
+        from_attributes = True
+
+
+class ArtifactDetailOut(ArtifactOut):
+    mime_type: str
+    facts: List[FactOut]
+    chunks: List[str]
+    has_file: bool
+
+
 class ThreadOut(BaseModel):
     thread_id: str
     patient_id: str
@@ -183,6 +201,10 @@ class PatientChatMessageOut(BaseModel):
 
 class PatientChatRequest(BaseModel):
     question: str
+
+
+class PatientSummaryOut(BaseModel):
+    summary: str
 
 
 class IngestResult(BaseModel):

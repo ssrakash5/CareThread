@@ -10,9 +10,11 @@ exist to populate the UI, not to exercise the extraction regexes.
 
 Run: python seed.py
 """
+import time
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import text, select
+from sqlalchemy.exc import ProgrammingError
 
 from app.config import settings
 from app.db import SessionLocal, engine, Base, ensure_vector_support
@@ -215,8 +217,19 @@ def seed():
     ensure_vector_support()
     # Drop + recreate so schema changes (e.g. embedding_dim -> pgvector width)
     # take effect. This is a demo database; the seed is the source of truth.
+    #
+    # CockroachDB runs DDL as an async schema-change job, so a CREATE TABLE
+    # immediately after DROP TABLE can race the drop and fail with
+    # "relation already exists" even though drop_all() already returned.
+    # Retry create_all once after a short pause if that happens.
     Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
+    except ProgrammingError as e:
+        if "already exists" not in str(e):
+            raise
+        time.sleep(3)
+        Base.metadata.create_all(bind=engine)
     print(f"AI provider: {settings.ai_provider}"
           + (f" ({settings.bedrock_model_id}, {settings.bedrock_embed_model_id}, dim={settings.embedding_dim})"
              if settings.ai_provider == "bedrock" else "")

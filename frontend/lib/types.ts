@@ -19,6 +19,21 @@ export interface Artifact {
   created_at: string;
 }
 
+export interface Fact {
+  fact_id: string;
+  fact_type: string;
+  fact_text: string;
+  normalized_value: string;
+  confidence: number;
+}
+
+export interface ArtifactDetail extends Artifact {
+  mime_type: string;
+  facts: Fact[];
+  chunks: string[];
+  has_file: boolean;
+}
+
 export interface CareThread {
   thread_id: string;
   patient_id: string;

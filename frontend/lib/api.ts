@@ -1,6 +1,11 @@
-import type { Patient, Artifact, CareThread, ThreadEvent, ThreadEvidence, ProposedAction, Family, FamilyChatMessage, PatientChatMessage } from "./types";
+import type { Patient, Artifact, ArtifactDetail, CareThread, ThreadEvent, ThreadEvidence, ProposedAction, Family, FamilyChatMessage, PatientChatMessage } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+
+// For <img src>/<a href> — points directly at the backend, not through req<T>.
+export function artifactFileUrl(artifactId: string): string {
+  return `${BASE}/artifacts/${artifactId}/file`;
+}
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
@@ -25,8 +30,10 @@ export const api = {
   getPatient: (id: string) => req<Patient>(`/patients/${id}`),
   getPatientMemory: (id: string, artifactType?: string) =>
     req<Artifact[]>(`/patients/${id}/memory${artifactType ? `?artifact_type=${artifactType}` : ""}`),
+  getArtifact: (id: string) => req<ArtifactDetail>(`/artifacts/${id}`),
   getPatientThreads: (id: string) => req<CareThread[]>(`/patients/${id}/threads`),
   getPatientFamily: (id: string) => req<Family>(`/patients/${id}/family`),
+  getPatientSummary: (id: string) => req<{ summary: string }>(`/patients/${id}/summary`),
 
   getPatientChat: (id: string) => req<PatientChatMessage[]>(`/patients/${id}/chat`),
   askPatientChat: (id: string, question: string) =>

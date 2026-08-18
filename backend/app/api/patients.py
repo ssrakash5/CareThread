@@ -6,10 +6,11 @@ from app.db import get_db
 from app.models import Patient, Artifact, CareThread, FamilyGroup, PatientChatMessage
 from app.schemas import (
     PatientOut, PatientCreate, ArtifactOut, ThreadOut, FamilyOut,
-    PatientChatMessageOut, PatientChatRequest,
+    PatientChatMessageOut, PatientChatRequest, PatientSummaryOut,
 )
 from app.api.families import build_family_out
 from app.ai.patient_chat import answer_patient_question, record_message
+from app.ai.patient_summary import generate_patient_summary
 
 router = APIRouter(prefix="/patients", tags=["patients"])
 
@@ -60,6 +61,13 @@ def get_patient_family(patient_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Patient is not part of a family group")
     group = db.get(FamilyGroup, patient.family_id)
     return build_family_out(db, group)
+
+
+@router.get("/{patient_id}/summary", response_model=PatientSummaryOut)
+def get_patient_summary(patient_id: str, db: Session = Depends(get_db)):
+    if not db.get(Patient, patient_id):
+        raise HTTPException(404, "Patient not found")
+    return PatientSummaryOut(summary=generate_patient_summary(db, patient_id))
 
 
 @router.get("/{patient_id}/chat", response_model=list[PatientChatMessageOut])

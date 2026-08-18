@@ -75,3 +75,16 @@ def store_bytes(patient_id: str, artifact_type: str, title: str, data: bytes, ex
         except Exception as e:  # noqa: BLE001
             log.warning("S3 upload failed (%s); storing locally instead", e)
     return store_bytes_local(patient_id, artifact_type, title, data, ext)
+
+
+def fetch_raw(s3_uri: str) -> bytes:
+    """Read back whatever store_raw/store_bytes wrote, regardless of scheme —
+    used to serve artifact content (images, PDFs) to the frontend."""
+    if s3_uri.startswith("local://"):
+        path = Path(settings.storage_dir).parent / s3_uri[len("local://"):]
+        return path.read_bytes()
+    if s3_uri.startswith("s3://"):
+        _, _, rest = s3_uri.partition("s3://")
+        bucket, _, key = rest.partition("/")
+        return _s3().get_object(Bucket=bucket, Key=key)["Body"].read()
+    raise ValueError(f"Unrecognized storage URI scheme: {s3_uri!r}")
